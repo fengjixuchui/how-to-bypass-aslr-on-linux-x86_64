@@ -94,14 +94,18 @@ This is my attempt to summarize what I got from reading Saelo's blogpost.
 To bypass ASLR you need:
 * A memory spraying technique, which lets you map contiguous memory of a given size, on a given range of addresses.
   
-  As [he says](https://googleprojectzero.blogspot.com/2020/01/remote-iphone-exploitation-part-2.html#:~:text=By%20abusing%20a%20memory%20leak%20(not%20an%20information%20leak!)%2C%20a%20bug%20in%20which%20a%20chunk%20of%20memory%20is%20%E2%80%9Cforgotten%E2%80%9D%20and%20never%20freed%2C%20and%20triggering%20it%20multiple%20times%20until%20the%20desired%20amount%20of%20memory%20has%20been%20leaked.) there are two ways of doing it:
+  As he says there are two ways of doing it:
   1. By abusing a memory leak (not an information leak!), a bug in which a chunk of memory is “forgotten” and never freed, and triggering it multiple times until the desired amount of memory has been leaked.
   2. By finding and abusing an “amplification gadget”: a piece of code that takes an existing chunk of data and copies it, potentially multiple times, thus allowing the attacker to spray a large amount of memory by only sending a relatively small number of bytes.
 * An `isAddressMapped` oracle, which given an address tells you wheter or not that address is mapped.
 
 ### PoC of ASLR bypass on Linux
 
-On Linux, it is possible to completely break ASLR if you are able to allocate 16TB of memory.
+Let's try to reproduce saelo's PoC to completely break aslr on Linux.
+
+<p align="center"> <img src="./images/ios-break-aslr.png" > <i> saelo's poc</i> <p/> <br/>
+
+On Linux it's not so easy, it is possible to completely break ASLR only if you are able to allocate 16TB of memory.
 
 ```C
 #include <stdio.h>
@@ -114,7 +118,7 @@ int main()
 
     // 16TB allocations
     for (int i = 0; i < 256; i++) {
-        void *mem = malloc(size); // this actually calls mmap because size is big
+        void *mem = malloc(size); // this ends up calling mmap
         if (!mem) {
             puts("Failed");
             return 1;
@@ -470,7 +474,7 @@ def getFile(fileid: int, extract="true"):
 
 ### Inspect the memory mappings of the challenge
 
-That was very important to me when trying to solve the challenge, I starred at the memory mappings for a lot of time.
+That was very important to me when trying to solve the challenge, I stared at the memory mappings for a lot of time.
 
 To do this, you can spawn a local instance of the challenge and read the process maps after doing some operations.
 
@@ -668,7 +672,7 @@ while isMapped == False:
     j -= 1
 ```
 
-At this point, we have `leakAddr` which is a mapped address like this: `0x7fXX00000000`, in [this](Memory-Spray-result) case, `leakAddr = 0x7fe300000000`. 
+At this point, we have `leakAddr` which is a mapped address like this: `0x7fXX00000000`, in [this](#memory-spray-result) case, `leakAddr = 0x7fe300000000`. 
 
 Now, if we want to follow the saelo technique, we should do a binary search of the range 0x7fXX00000000 - 0x7fXXffffffff, in order to find lower and upper bounds, the problem is that there are some holes in that range, so the binary search fails a lot of times.
 
@@ -776,7 +780,7 @@ To achieve code execution I overwrote libkayle.so's memcpy@got entry with system
 
 ### Get libkayle base
 Luckily for us libc base and libkayle.so base are at a constant offset from the lastMappedPage, I didn't know that was the case so I wrote a egghunter which search for `\x7fELF` \(Header of ELF executables\), which in the end wasn't useful.
-```
+```py
     # Scan backwards looking for b'\x7fELF'
     i = 0
     numElf = 0
@@ -830,6 +834,8 @@ Fortunately overwriting memcpy@got with system was good enough to get the flag a
 You can find the exploit [here](resources/x.py).
 
 <p align="center"><img src="./images/exploit-final.png"></p><br/>
+
+There is also an 100% reliable version of the exploit [here](resources/reliable_exploit.py).
 
 ## 5. Conclusion
 
